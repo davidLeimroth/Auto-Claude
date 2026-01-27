@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight, FileCode, AlertTriangle, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileCode, AlertTriangle, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { Progress } from '../../ui/progress';
 import { cn } from '../../../lib/utils';
 import type { MergeProgress, MergeLogEntry, MergeLogEntryType } from '../../../../shared/types';
@@ -10,6 +10,9 @@ interface MergeProgressOverlayProps {
   logEntries: MergeLogEntry[];
 }
 
+/** Time in ms without a progress update before showing stalled indicator */
+const STALL_THRESHOLD_MS = 30000;
+
 const STAGE_TO_I18N_KEY: Record<string, string> = {
   analyzing: 'stages.analyzing',
   detecting_conflicts: 'stages.detectingConflicts',
@@ -17,6 +20,7 @@ const STAGE_TO_I18N_KEY: Record<string, string> = {
   validating: 'stages.validating',
   complete: 'stages.complete',
   error: 'stages.error',
+  stalled: 'stages.stalled',
 };
 
 const LOG_TYPE_COLORS: Record<MergeLogEntryType, string> = {
@@ -29,11 +33,49 @@ const LOG_TYPE_COLORS: Record<MergeLogEntryType, string> = {
 /**
  * Overlay component displaying real-time merge progress with a progress bar,
  * stage label, conflict counter, current file indicator, and expandable log viewer.
+ *
+ * Detects stalled merges when no progress update is received for 30+ seconds.
  */
 export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgressOverlayProps) {
   const { t } = useTranslation(['taskReview']);
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const [isStalled, setIsStalled] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reset stall timer whenever we receive a new progress update
+  const resetStallTimer = useCallback(() => {
+    setIsStalled(false);
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+    }
+    stallTimerRef.current = setTimeout(() => {
+      setIsStalled(true);
+    }, STALL_THRESHOLD_MS);
+  }, []);
+
+  // Start/reset stall detection when progress updates arrive
+  useEffect(() => {
+    if (mergeProgress && mergeProgress.stage !== 'complete' && mergeProgress.stage !== 'error') {
+      resetStallTimer();
+    } else {
+      // Clear timer on terminal states
+      setIsStalled(false);
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    }
+  }, [mergeProgress, resetStallTimer]);
+
+  // Cleanup stall timer on unmount
+  useEffect(() => {
+    return () => {
+      if (stallTimerRef.current) {
+        clearTimeout(stallTimerRef.current);
+      }
+    };
+  }, []);
 
   // Auto-scroll log viewer to bottom when new entries arrive
   useEffect(() => {
@@ -50,8 +92,10 @@ export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgres
   const isError = stage === 'error';
   const isComplete = stage === 'complete';
 
-  const stageLabel = STAGE_TO_I18N_KEY[stage]
-    ? t(`taskReview:mergeProgress.${STAGE_TO_I18N_KEY[stage]}`)
+  // Use stalled stage label when stalled, otherwise use the current stage
+  const effectiveStage = isStalled && !isError && !isComplete ? 'stalled' : stage;
+  const stageLabel = STAGE_TO_I18N_KEY[effectiveStage]
+    ? t(`taskReview:mergeProgress.${STAGE_TO_I18N_KEY[effectiveStage]}`)
     : message;
 
   const conflictsFound = details?.conflicts_found ?? 0;
@@ -64,7 +108,8 @@ export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgres
         'rounded-xl border p-4 space-y-3',
         isError && 'border-destructive/50 bg-destructive/5',
         isComplete && 'border-success/50 bg-success/5',
-        !isError && !isComplete && 'border-info/50 bg-info/5'
+        isStalled && !isError && !isComplete && 'border-warning/50 bg-warning/5',
+        !isError && !isComplete && !isStalled && 'border-info/50 bg-info/5'
       )}
     >
       {/* Stage label and percentage */}
@@ -74,6 +119,8 @@ export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgres
             <XCircle className="h-4 w-4 text-destructive shrink-0" />
           ) : isComplete ? (
             <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
+          ) : isStalled ? (
+            <Clock className="h-4 w-4 text-warning shrink-0" />
           ) : (
             <Loader2 className="h-4 w-4 animate-spin text-info shrink-0" />
           )}
@@ -81,7 +128,8 @@ export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgres
             className={cn(
               'text-sm font-medium',
               isError && 'text-destructive',
-              isComplete && 'text-success'
+              isComplete && 'text-success',
+              isStalled && !isError && !isComplete && 'text-warning'
             )}
           >
             {stageLabel}
@@ -97,7 +145,8 @@ export function MergeProgressOverlay({ mergeProgress, logEntries }: MergeProgres
           'h-2',
           isError && '[&>div]:bg-destructive',
           isComplete && '[&>div]:bg-success',
-          !isError && !isComplete && '[&>div]:bg-info'
+          isStalled && !isError && !isComplete && '[&>div]:bg-warning',
+          !isError && !isComplete && !isStalled && '[&>div]:bg-info'
         )}
         animated={!isError && !isComplete}
       />

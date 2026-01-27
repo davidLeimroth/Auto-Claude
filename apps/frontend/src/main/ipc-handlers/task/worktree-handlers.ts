@@ -2009,6 +2009,18 @@ export function registerWorktreeHandlers(
               debug('TIMEOUT: Merge process exceeded', MERGE_TIMEOUT_MS, 'ms, killing...');
               resolved = true;
 
+              // Send timeout error progress event to the renderer
+              const mainWindow = getMainWindow();
+              if (mainWindow) {
+                mainWindow.webContents.send(IPC_CHANNELS.TASK_MERGE_PROGRESS, taskId, {
+                  type: 'progress',
+                  stage: 'error',
+                  percent: 0,
+                  message: 'Merge process timed out after 10 minutes',
+                  details: {}
+                });
+              }
+
               // Platform-specific process termination with fallback
               killProcessGracefully(mergeProcess, {
                 debugPrefix: '[MERGE]',
@@ -2401,6 +2413,19 @@ export function registerWorktreeHandlers(
             resolved = true;
             if (timeoutId) clearTimeout(timeoutId);
             console.error('[MERGE] Process spawn error:', err);
+
+            // Send error progress event to the renderer
+            const mainWindow = getMainWindow();
+            if (mainWindow) {
+              mainWindow.webContents.send(IPC_CHANNELS.TASK_MERGE_PROGRESS, taskId, {
+                type: 'progress',
+                stage: 'error',
+                percent: 0,
+                message: `Merge process crashed: ${err.message}`,
+                details: {}
+              });
+            }
+
             resolve({
               success: false,
               error: `Failed to run merge: ${err.message}`
