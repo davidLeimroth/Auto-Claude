@@ -121,6 +121,7 @@ from merge import (
     FileTimelineTracker,
     MergeOrchestrator,
 )
+from merge.progress import MergeProgressCallback, MergeProgressStage, emit_progress
 
 MODULE = "workspace"
 
@@ -143,6 +144,26 @@ MODULE = "workspace"
 # - _get_recent_merges_context
 # - _merge_file_with_ai
 # - _heuristic_merge
+
+
+def _create_merge_progress_callback() -> MergeProgressCallback | None:
+    """
+    Create a progress callback for merge operations when running as a subprocess.
+
+    Returns emit_progress (writing JSON to stdout) only when stdout is piped
+    (i.e., running as a subprocess from the Electron frontend). Returns None
+    when running interactively in a terminal to avoid polluting CLI output.
+
+    This function must be called at runtime (not at import time) to ensure
+    sys.stdout state is accurate.
+    """
+    import sys
+
+    # Only emit progress JSON when stdout is piped (subprocess mode).
+    # In interactive CLI mode (TTY), progress JSON would clutter the output.
+    if not sys.stdout.isatty():
+        return emit_progress
+    return None
 
 
 def merge_existing_build(
@@ -402,8 +423,19 @@ def _try_smart_merge_inner(
         no_commit=no_commit,
     )
 
+    # Create progress callback for subprocess mode (Electron frontend).
+    # Only emits JSON to stdout when piped, not in interactive CLI.
+    progress_callback = _create_merge_progress_callback()
+
     try:
         print(muted("  Analyzing changes with intent-aware merge..."))
+
+        if progress_callback is not None:
+            progress_callback(
+                MergeProgressStage.ANALYZING,
+                0,
+                "Starting merge analysis",
+            )
 
         # Capture worktree state in FileTimelineTracker before merge
         try:
@@ -440,6 +472,13 @@ def _try_smart_merge_inner(
         )
 
         # Check for git-level conflicts first (branch divergence)
+        if progress_callback is not None:
+            progress_callback(
+                MergeProgressStage.DETECTING_CONFLICTS,
+                25,
+                "Checking for git-level conflicts",
+            )
+
         debug(MODULE, "Checking for git-level conflicts")
         git_conflicts = _check_git_conflicts(project_dir, spec_name)
 
@@ -518,6 +557,14 @@ def _try_smart_merge_inner(
                 num_conflicts=len(git_conflicts.get("conflicting_files", [])),
             )
 
+            if progress_callback is not None:
+                progress_callback(
+                    MergeProgressStage.RESOLVING,
+                    50,
+                    f"Resolving {len(git_conflicts.get('conflicting_files', []))} conflicting files with AI",
+                    {"conflicts_found": len(git_conflicts.get("conflicting_files", []))},
+                )
+
             # Try to resolve git conflicts with AI
             resolution_result = _resolve_git_conflicts_with_ai(
                 project_dir,
@@ -535,6 +582,19 @@ def _try_smart_merge_inner(
                     resolved_files=resolution_result.get("resolved_files", []),
                     stats=resolution_result.get("stats", {}),
                 )
+
+                if progress_callback is not None:
+                    stats = resolution_result.get("stats", {})
+                    progress_callback(
+                        MergeProgressStage.COMPLETE,
+                        100,
+                        "Merge complete",
+                        {
+                            "conflicts_found": stats.get("conflicts_resolved", 0),
+                            "conflicts_resolved": stats.get("conflicts_resolved", 0),
+                        },
+                    )
+
                 return resolution_result
             else:
                 # AI couldn't resolve all conflicts
@@ -547,6 +607,19 @@ def _try_smart_merge_inner(
                     resolved_files=resolution_result.get("resolved_files", []),
                     error=resolution_result.get("error"),
                 )
+
+                if progress_callback is not None:
+                    progress_callback(
+                        MergeProgressStage.ERROR,
+                        0,
+                        "Some conflicts could not be resolved",
+                        {
+                            "conflicts_found": len(
+                                resolution_result.get("remaining_conflicts", [])
+                            ),
+                        },
+                    )
+
                 return {
                     "success": False,
                     "conflicts": resolution_result.get("remaining_conflicts", []),
@@ -679,6 +752,20 @@ def _try_smart_merge_inner(
                         "skipped_count": len(skipped_files),
                     },
                 }
+
+                if progress_callback is not None:
+                    if len(skipped_files) == 0:
+                        progress_callback(
+                            MergeProgressStage.COMPLETE,
+                            100,
+                            f"Direct copy complete ({len(resolved_files)} files)",
+                        )
+                    else:
+                        progress_callback(
+                            MergeProgressStage.ERROR,
+                            0,
+                            f"{len(skipped_files)} file(s) could not be copied",
+                        )
                 if skipped_files:
                     result["skipped_files"] = skipped_files
                     result["partial_success"] = len(resolved_files) > 0
@@ -725,6 +812,14 @@ def _try_smart_merge_inner(
 
         # All conflicts can be auto-merged or no conflicts
         print(muted("  All changes compatible, proceeding with merge..."))
+
+        if progress_callback is not None:
+            progress_callback(
+                MergeProgressStage.COMPLETE,
+                100,
+                f"Analysis complete ({files_to_merge} files compatible)",
+            )
+
         return {
             "success": True,
             "stats": {
@@ -736,6 +831,13 @@ def _try_smart_merge_inner(
     except Exception as e:
         # If smart merge fails, fall back to git
         import traceback
+
+        if progress_callback is not None:
+            progress_callback(
+                MergeProgressStage.ERROR,
+                0,
+                f"Smart merge error: {e}",
+            )
 
         print(muted(f"  Smart merge error: {e}"))
         traceback.print_exc()
