@@ -2042,10 +2042,40 @@ export function registerWorktreeHandlers(
             }
           }, MERGE_TIMEOUT_MS);
 
+          let lineBuffer = ''; // Buffer for partial JSON lines spanning data chunks
+
           mergeProcess.stdout.on('data', (data: Buffer) => {
             const chunk = data.toString();
-            stdout += chunk;
             debug('STDOUT:', chunk);
+
+            // Prepend any buffered partial line from previous chunk
+            const combined = lineBuffer + chunk;
+            const lines = combined.split('\n');
+
+            // Last element may be a partial line - buffer it for next chunk
+            lineBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed) continue;
+
+              try {
+                const parsed = JSON.parse(trimmed);
+                if (parsed && parsed.type === 'progress') {
+                  const mainWindow = getMainWindow();
+                  if (mainWindow) {
+                    mainWindow.webContents.send(IPC_CHANNELS.TASK_MERGE_PROGRESS, taskId, parsed);
+                  }
+                  // Don't accumulate progress lines in stdout - they are not part of the final result
+                  continue;
+                }
+              } catch {
+                // Not valid JSON - treat as regular output
+              }
+
+              // Accumulate non-progress lines for final result parsing
+              stdout += line + '\n';
+            }
           });
 
           mergeProcess.stderr.on('data', (data: Buffer) => {
@@ -2059,6 +2089,24 @@ export function registerWorktreeHandlers(
             if (resolved) return; // Prevent double-resolution
             resolved = true;
             if (timeoutId) clearTimeout(timeoutId);
+
+            // Flush any remaining buffered line
+            if (lineBuffer.trim()) {
+              try {
+                const parsed = JSON.parse(lineBuffer.trim());
+                if (parsed && parsed.type === 'progress') {
+                  const mainWindow = getMainWindow();
+                  if (mainWindow) {
+                    mainWindow.webContents.send(IPC_CHANNELS.TASK_MERGE_PROGRESS, taskId, parsed);
+                  }
+                } else {
+                  stdout += lineBuffer;
+                }
+              } catch {
+                stdout += lineBuffer;
+              }
+              lineBuffer = '';
+            }
 
             debug('Process exited with code:', code, 'signal:', signal);
             debug('Full stdout:', stdout);
