@@ -379,6 +379,30 @@ export interface MergeStats {
   pathMappedAIMergeCount?: number;
 }
 
+// Merge progress tracking (for progress bar during merge operations)
+export type MergeStage = 'analyzing' | 'detecting_conflicts' | 'resolving' | 'validating' | 'complete' | 'error';
+
+export interface MergeProgress {
+  stage: MergeStage;
+  percent: number;
+  message: string;
+  details?: {
+    conflicts_found?: number;
+    conflicts_resolved?: number;
+    current_file?: string;
+  };
+}
+
+// Merge log entry (for conflict resolution logging)
+export type MergeLogEntryType = 'info' | 'success' | 'warning' | 'error';
+
+export interface MergeLogEntry {
+  timestamp: string;
+  type: MergeLogEntryType;
+  message: string;
+  details?: string;
+}
+
 export interface WorktreeMergeResult {
   success: boolean;
   message: string;
