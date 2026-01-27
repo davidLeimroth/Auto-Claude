@@ -44,7 +44,8 @@ import type {
   TaskMetadata,
   TaskLogs,
   TaskLogStreamChunk,
-  ImageAttachment
+  ImageAttachment,
+  MergeProgress
 } from './task';
 import type {
   TerminalCreateOptions,
@@ -765,6 +766,9 @@ export interface ElectronAPI {
   ) => () => void;
   onTaskLogsStream: (
     callback: (specId: string, chunk: TaskLogStreamChunk) => void
+  ) => () => void;
+  onMergeProgress: (
+    callback: (taskId: string, progress: MergeProgress) => void
   ) => () => void;
 
   // File explorer operations
