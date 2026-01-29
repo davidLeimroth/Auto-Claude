@@ -781,6 +781,21 @@ def create_client(
                 server_config["headers"] = custom["headers"]
             mcp_servers[server_id] = server_config
 
+    # Load user-defined agents from ~/.claude/agents/ and .claude/agents/
+    # These are custom subagents that users can create for specialized tasks
+    # Load early so we can include agent info in the system prompt
+    all_agents: dict[str, Any] = {}
+
+    if is_user_agents_enabled():
+        user_agents = load_user_agents(project_dir)
+        if user_agents:
+            all_agents.update(user_agents)
+            print(f"   - Custom agents: {len(user_agents)} loaded from ~/.claude/agents/")
+
+    # Merge with explicitly passed agents (higher priority)
+    if agents:
+        all_agents.update(agents)
+
     # Build system prompt
     base_prompt = (
         f"You are an expert full-stack developer building production-quality software. "
@@ -792,6 +807,23 @@ def create_client(
         f"your work through thorough testing. You communicate progress through Git commits "
         f"and build-progress.txt updates."
     )
+
+    # Include information about available custom agents in the system prompt
+    # This helps Claude know when to delegate tasks to specialized agents
+    if all_agents:
+        agent_descriptions = []
+        for agent_name, agent_config in all_agents.items():
+            desc = agent_config.get("description", "No description")
+            agent_descriptions.append(f"  - **{agent_name}**: {desc}")
+
+        agents_section = (
+            "\n\n# Available Custom Agents\n\n"
+            "You have access to specialized subagents via the Task tool. "
+            "Use these agents proactively when their expertise matches the task at hand. "
+            "Delegate to the appropriate agent rather than doing everything yourself.\n\n"
+            + "\n".join(agent_descriptions)
+        )
+        base_prompt = f"{base_prompt}{agents_section}"
 
     # Include CLAUDE.md if enabled and present
     if should_use_claude_md():
@@ -840,21 +872,6 @@ def create_client(
     # See: https://platform.claude.com/docs/en/agent-sdk/structured-outputs
     if output_format:
         options_kwargs["output_format"] = output_format
-
-    # Load user-defined agents from ~/.claude/agents/ and .claude/agents/
-    # These are custom subagents that users can create for specialized tasks
-    # See: https://code.claude.com/docs/en/sub-agents
-    all_agents: dict[str, Any] = {}
-
-    if is_user_agents_enabled():
-        user_agents = load_user_agents(project_dir)
-        if user_agents:
-            all_agents.update(user_agents)
-            print(f"   - Custom agents: {len(user_agents)} loaded from ~/.claude/agents/")
-
-    # Merge with explicitly passed agents (higher priority)
-    if agents:
-        all_agents.update(agents)
 
     # Add subagent definitions if any are available
     # See: https://platform.claude.com/docs/en/agent-sdk/subagents
