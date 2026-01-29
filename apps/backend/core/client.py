@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.agent_loader import is_user_agents_enabled, load_user_agents
 from core.platform import (
     is_windows,
     validate_cli_path,
@@ -840,9 +841,24 @@ def create_client(
     if output_format:
         options_kwargs["output_format"] = output_format
 
-    # Add subagent definitions if specified
-    # See: https://platform.claude.com/docs/en/agent-sdk/subagents
+    # Load user-defined agents from ~/.claude/agents/ and .claude/agents/
+    # These are custom subagents that users can create for specialized tasks
+    # See: https://code.claude.com/docs/en/sub-agents
+    all_agents: dict[str, Any] = {}
+
+    if is_user_agents_enabled():
+        user_agents = load_user_agents(project_dir)
+        if user_agents:
+            all_agents.update(user_agents)
+            print(f"   - Custom agents: {len(user_agents)} loaded from ~/.claude/agents/")
+
+    # Merge with explicitly passed agents (higher priority)
     if agents:
-        options_kwargs["agents"] = agents
+        all_agents.update(agents)
+
+    # Add subagent definitions if any are available
+    # See: https://platform.claude.com/docs/en/agent-sdk/subagents
+    if all_agents:
+        options_kwargs["agents"] = all_agents
 
     return ClaudeSDKClient(options=ClaudeAgentOptions(**options_kwargs))
